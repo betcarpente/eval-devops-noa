@@ -10,8 +10,8 @@ on:
 jobs:
   # Execute Python code linting
   lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 1
+    runs-on: self-hosted
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v7  
@@ -22,6 +22,13 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: application/config/requirements.txt
+
+      # Isolate dependencies from the system interpreter of the self-hosted runner
+      - name: Create virtual environment
+        working-directory: application
+        run: |
+          python -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
         working-directory: application
@@ -34,8 +41,8 @@ jobs:
   # Execute tests using pytest
   test:
     needs: lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 1
+    runs-on: self-hosted
+    timeout-minutes: 5
 
     # Use two different python versions for testing )
     strategy:
@@ -72,6 +79,12 @@ jobs:
           cache: pip
           cache-dependency-path: application/config/requirements.txt
 
+      - name: Create virtual environment
+        working-directory: application
+        run: |
+          python -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
       - name: Install dependencies
         working-directory: application
         run: pip install -r config/requirements.txt
@@ -95,15 +108,15 @@ jobs:
   # Build the application image
   build:
     needs: [lint, test]
-    runs-on: ubuntu-latest
-    timeout-minutes: 1
+    runs-on: self-hosted
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v7
 
       - name: Build and start services
         working-directory: application
-        run: docker compose up --build --detach --wait --wait-timeout 45
+        run: docker-compose up --build --detach --wait --wait-timeout 45
 
       - name: Verify application
         working-directory: application
@@ -114,15 +127,15 @@ jobs:
       - name: Stop services
         if: always()
         working-directory: application
-        run: docker compose down --volumes
+        run: docker-compose down --volumes
 
   # CI status check
   ci-ok:
     name: Ci-ok
     if: always()
     needs: [lint, test, build]
-    runs-on: ubuntu-latest
-    timeout-minutes: 1
+    runs-on: self-hosted
+    timeout-minutes: 5
 
     # Download test reports and verify CI results
     steps:
