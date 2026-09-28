@@ -2,6 +2,7 @@ import os
 import sqlite3
 import time
 
+import psycopg
 from flask import Flask, g, jsonify, redirect, render_template_string, request, url_for
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
@@ -12,9 +13,10 @@ from prometheus_client import (
 
 app = Flask(__name__)
 app.config["DATABASE"] = os.environ.get(
-        "DATABASE_PATH",
-        os.path.join(app.instance_path, "counter.sqlite3"),
+    "DATABASE_PATH",
+    os.path.join(app.instance_path, "counter.sqlite3"),
 )
+app.config["DATABASE_URL"] = os.environ.get("DATABASE_URL")
 os.makedirs(app.instance_path, exist_ok=True)
 
 PAGE = """
@@ -58,25 +60,40 @@ request_duration_seconds = Histogram(
 
 
 def initialize_database():
-    database_path = app.config["DATABASE"]
-    os.makedirs(os.path.dirname(os.path.abspath(database_path)), exist_ok=True)
-    connection = sqlite3.connect(database_path)
+    database_url = app.config["DATABASE_URL"]
+    if database_url:
+        connection = psycopg.connect(database_url)
+    else:
+        database_path = app.config["DATABASE"]
+        os.makedirs(os.path.dirname(os.path.abspath(database_path)), exist_ok=True)
+        connection = sqlite3.connect(database_path)
     try:
         connection.execute(
             "CREATE TABLE IF NOT EXISTS counter ("
             "id INTEGER PRIMARY KEY CHECK (id = 1), "
             "value INTEGER NOT NULL)"
         )
-        connection.execute(
-            "INSERT OR IGNORE INTO counter (id, value) VALUES (1, 0)"
-        )
+        if database_url:
+            connection.execute(
+                "INSERT INTO counter (id, value) VALUES (1, 0) "
+                "ON CONFLICT (id) DO NOTHING"
+            )
+        else:
+            connection.execute(
+                "INSERT OR IGNORE INTO counter (id, value) VALUES (1, 0)"
+            )
         connection.commit()
     finally:
         connection.close()
 
 
 def get_counter_value():
-    connection = sqlite3.connect(app.config["DATABASE"])
+    database_url = app.config["DATABASE_URL"]
+    connection = (
+        psycopg.connect(database_url)
+        if database_url
+        else sqlite3.connect(app.config["DATABASE"])
+    )
     try:
         result = connection.execute(
             "SELECT value FROM counter WHERE id = 1"
@@ -87,10 +104,18 @@ def get_counter_value():
 
 
 def change_counter(amount):
-    connection = sqlite3.connect(app.config["DATABASE"])
+    database_url = app.config["DATABASE_URL"]
+    connection = (
+        psycopg.connect(database_url)
+        if database_url
+        else sqlite3.connect(app.config["DATABASE"])
+    )
     try:
+        zero_floor = "GREATEST" if database_url else "MAX"
+        placeholder = "%s" if database_url else "?"
         connection.execute(
-            "UPDATE counter SET value = MAX(0, value + ?) WHERE id = 1",
+            f"UPDATE counter SET value = {zero_floor}(0, value + {placeholder}) "
+            "WHERE id = 1",
             (amount,),
         )
         connection.commit()
@@ -142,8 +167,8 @@ def decrement():
 def health():
     try:
         get_counter_value()
-    except sqlite3.Error:
-        return jsonify(status="unavailable", dependency="sqlite"), 503
+    except (psycopg.Error, sqlite3.Error):
+        return jsonify(status="unavailable", dependency="database"), 503
     return jsonify(status="ok"), 200
 
 
@@ -167,13 +192,18 @@ if __name__ == "__main__":
 initialize_database()
 
 
-def test_counter_buttons_update_database(tmp_path, monkeypatch):
-    monkeypatch.setitem(
-        app.config,
-        "DATABASE",
-        str(tmp_path / "counter.sqlite3"),
+def test_counter_buttons_update_database():
+    database_url = app.config["DATABASE_URL"]
+    connection = (
+        psycopg.connect(database_url)
+        if database_url
+        else sqlite3.connect(app.config["DATABASE"])
     )
-    initialize_database()
+    try:
+        connection.execute("UPDATE counter SET value = 0 WHERE id = 1")
+        connection.commit()
+    finally:
+        connection.close()
 
     with app.test_client() as client:
         page = client.get("/")
