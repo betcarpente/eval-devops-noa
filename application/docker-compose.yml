@@ -1,3 +1,6 @@
+# Format 2.4: required by docker-compose v1 and supports service_healthy conditions
+version: "2.4"
+
 # Python app service (from dockerfile image)
 services:
   app:
@@ -31,8 +34,6 @@ services:
       POSTGRES_DB: counter
       POSTGRES_USER: counter
       POSTGRES_PASSWORD: counter-local
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

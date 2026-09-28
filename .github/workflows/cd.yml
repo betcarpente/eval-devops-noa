@@ -112,7 +112,7 @@ jobs:
         working-directory: application
         run: |
           docker-compose pull app
-          docker-compose up --detach --wait --wait-timeout 60
+          docker-compose up --detach
 
       - name: Health check
         id: health
@@ -139,4 +139,4 @@ jobs:
           fi
           echo "Rolling back to ${APP_IMAGE}"
           docker pull "${APP_IMAGE}"
-          docker-compose up --detach --wait --wait-timeout 60
+          docker-compose up --detach

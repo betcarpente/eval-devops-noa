@@ -116,13 +116,21 @@ jobs:
 
       - name: Build and start services
         working-directory: application
-        run: docker-compose up --build --detach --wait --wait-timeout 45
+        run: docker-compose up --build --detach
 
       - name: Verify application
         working-directory: application
         run: |
-          curl --fail --silent --show-error http://localhost:5000/health
-          curl --fail --silent --show-error http://localhost:5000/ | grep -q 'Compteur'
+          for attempt in $(seq 1 10); do
+            if curl --fail --silent --show-error http://localhost:5000/health; then
+              curl --fail --silent --show-error http://localhost:5000/ | grep -q 'Compteur'
+              exit 0
+            fi
+            echo "Application not ready yet (attempt ${attempt})"
+            sleep 5
+          done
+          docker-compose logs
+          exit 1
 
       - name: Stop services
         if: always()
