@@ -101,8 +101,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Build application image
-        run: docker build --tag counter-app:ci application
+      - name: Build and start services
+        working-directory: application
+        run: docker-compose up --build --detach --wait --wait-timeout 45
+
+      - name: Verify application
+        working-directory: application
+        run: |
+          curl --fail --silent --show-error http://localhost:5000/health
+          curl --fail --silent --show-error http://localhost:5000/ | grep -q 'Compteur'
+
+      - name: Stop services
+        if: always()
+        working-directory: application
+        run: docker-compose down --volumes
 
   # CI status check
   ci-ok:
