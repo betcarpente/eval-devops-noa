@@ -1,7 +1,8 @@
 # Python app service (from dockerfile image)
 services:
   app:
-    image: counter-app:local
+    # APP_IMAGE is set by the CD workflow to deploy a published registry tag
+    image: ${APP_IMAGE:-counter-app:local}
     build:
       context: .
       dockerfile: Dockerfile

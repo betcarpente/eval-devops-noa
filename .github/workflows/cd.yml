@@ -1,0 +1,142 @@
+name: CD Workflow
+
+# Runs after a push on main, or manually
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semver tag to publish (ex. 1.2.3)
+        required: false
+        default: 1.0.0
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Build the image and push it to the registry with three tags
+  publish:
+    runs-on: self-hosted
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      sha-image: ${{ steps.tags.outputs.sha_image }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: application/config/requirements.txt
+
+      - name: Create virtual environment
+        working-directory: application
+        run: |
+          python -m venv .venv
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies
+        working-directory: application
+        run: pip install -r config/requirements.txt
+
+      # Three tags: latest, short commit SHA and semver
+      - name: Compute image tags
+        id: tags
+        run: |
+          repository=$(echo "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')
+          image="${REGISTRY}/${repository}"
+          short_sha=$(git rev-parse --short HEAD)
+          semver="${{ inputs.version || format('1.0.{0}', github.run_number) }}"
+          echo "sha_image=${image}:${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "latest_image=${image}:latest" >> "$GITHUB_OUTPUT"
+          echo "semver_image=${image}:${semver}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to the registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login "${REGISTRY}" -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push image
+        working-directory: application
+        run: |
+          docker build \
+            --tag "${{ steps.tags.outputs.latest_image }}" \
+            --tag "${{ steps.tags.outputs.sha_image }}" \
+            --tag "${{ steps.tags.outputs.semver_image }}" \
+            .
+          docker push "${{ steps.tags.outputs.latest_image }}"
+          docker push "${{ steps.tags.outputs.sha_image }}"
+          docker push "${{ steps.tags.outputs.semver_image }}"
+
+  # Deploy the published image on the self-hosted machine
+  deploy:
+    needs: publish
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    runs-on: self-hosted
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+      packages: read
+
+    env:
+      APP_IMAGE: ${{ needs.publish.outputs.sha-image }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Log in to the registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login "${REGISTRY}" -u "${{ github.actor }}" --password-stdin
+
+      # Keep the running image so a failed release can be rolled back
+      - name: Record running image
+        id: previous
+        working-directory: application
+        run: |
+          container=$(docker-compose ps -q app || true)
+          previous=""
+          if [ -n "${container}" ]; then
+            previous=$(docker inspect --format '{{.Config.Image}}' "${container}")
+          fi
+          echo "image=${previous}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy
+        working-directory: application
+        run: |
+          docker-compose pull app
+          docker-compose up --detach --wait --wait-timeout 60
+
+      - name: Health check
+        id: health
+        run: |
+          for attempt in 1 2 3; do
+            if curl --fail --silent --show-error http://localhost:5000/health; then
+              echo "Health check passed on attempt ${attempt}"
+              exit 0
+            fi
+            echo "Health check attempt ${attempt} failed"
+            sleep 10
+          done
+          exit 1
+
+      - name: Rollback to previous image
+        if: failure() && steps.health.outcome == 'failure'
+        working-directory: application
+        env:
+          APP_IMAGE: ${{ steps.previous.outputs.image }}
+        run: |
+          if [ -z "${APP_IMAGE}" ]; then
+            echo "No previous image recorded, rollback impossible"
+            exit 1
+          fi
+          echo "Rolling back to ${APP_IMAGE}"
+          docker pull "${APP_IMAGE}"
+          docker-compose up --detach --wait --wait-timeout 60
