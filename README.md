@@ -30,12 +30,39 @@ Répond aux critères donnés dans l'eval (matrice sur plusieurs versions, insta
 - Exécute le docker compose en buildant l'image 
 
 ### Workflow CD :
-todo
+**Publish**
+- Build de l'image et push sur le registry GHCR
+- Trois tags : latest, SHA court du commit et semver (1.0.<run_number> par défaut)
 
-### application : 
-- fonctionnement
-- mise en place en local (avec docker)
+**Deploy**
+- Ne s'exécute que sur main ou via _workflow_dispatch_
+- Déploiement réel sur la machine cible (runner self-hosted) via docker-compose, avec l'image du SHA
+- Health check : curl sur /health 
+- Si le healthcheck échoue, le job échoue et l'image précédente est pull (rollback)
+
+### Runner GitHub Actions :
+- Tourne en local (WSL / Ubuntu)
+- nom : wsl-01
+
+### Application : 
+**Fonctionnement**
+- Simple application avec bouton pour incrémentation / décrémentation
+- Infos stockées dans la DB
 
 ### Monitoring :
 - prometheus / grafana
 - dashboards
+
+### mise en place en local (avec docker)
+```bash
+cd application
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r config/requirements.txt
+
+docker-compose up --build -d
+```
+L'application est disponible sur http://localhost:5000
+
+Pour arrêter : `docker-compose down` (-v pour supprimer les données sql)
