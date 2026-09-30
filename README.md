@@ -9,9 +9,9 @@ Pour l'évaluation sur le cours DevOps
 - Compte utilisateur appuser
 
 **Docker Compose**
-- Deux services : Python3.12 (source : dockerfile) et PostgreSQL (16-alpine)
-- Port mappé (5000:5000)
-- Deux healthckeck différents selon le service
+- Quatre services : Python3.12 (source : dockerfile), PostgreSQL (16-alpine), Prometheus et Grafana
+- Ports mappés (5000:5000, 9090:9090, 3000:3000)
+- Healthcheck spécifique à chaque service
 
 ### Workflow CI : 
 **Lint (flake8)**
@@ -50,8 +50,32 @@ Répond aux critères donnés dans l'eval (matrice sur plusieurs versions, insta
 - Infos stockées dans la DB
 
 ### Monitoring :
-- prometheus / grafana
-- dashboards
+**Endpoint `/metrics`** (format texte Prometheus, exposé par l'application)
+- `http_requests_total` : compteur des requêtes reçues, labels `endpoint` et `code` (statut HTTP)
+- `request_duration_seconds` : histogramme de latence par route, sert au calcul des percentiles (p95, p99)
+- `app_build_info` : jauge à 1 portant les labels `version` et `commit` (SHA déployé, injecté par le CD)
+
+**Prometheus** — http://localhost:9090
+- Scrape `app:5000/metrics` toutes les 15s, rétention 7 jours
+- Règles d'alerte dans `monitoring/alert-rules.yml`
+
+**Grafana** — http://localhost:3000 (`admin` / `admin` par défaut)
+- Datasource et dashboard provisionnés automatiquement (`monitoring/grafana/provisioning`)
+- Dashboard *Counter App - Overview* : version déployée, taux d'erreurs 5xx, p95,
+  requêtes par endpoint, requêtes par code HTTP, latence p95/p99 par route
+
+**Alertes**
+| Alerte | Condition | `for` | Sévérité |
+|---|---|---|---|
+| `HighErrorRate` | ratio 5xx / total > 5% sur 5 min glissantes | 2m | critical |
+| `HighLatencyP95` | p95 (issu de l'histogramme) > 500 ms sur 5 min glissantes | 5m | warning |
+
+Justification des seuils : au-delà de 5% d'erreurs serveur l'impact utilisateur n'est plus marginal,
+et `for: 2m` (deux évaluations consécutives) évite de déclencher sur un pic isolé lors d'un déploiement.
+Pour la latence, 500 ms au p95 correspond à une dégradation perceptible ; `for: 5m` est plus long car
+la latence est plus bruitée que le taux d'erreurs et on attend une tendance stable.
+
+Un endpoint `/test-error` (500) permet de déclencher des erreurs pour valider les alertes.
 
 ### mise en place en local (avec docker)
 ```bash
@@ -63,6 +87,10 @@ pip install -r config/requirements.txt
 
 docker-compose up --build -d
 ```
-L'application est disponible sur http://localhost:5000
+| Service | URL |
+|---|---|
+| Application | http://localhost:5000 |
+| Prometheus | http://localhost:9090 |
+| Grafana | http://localhost:3000 |
 
 Pour arrêter : `docker-compose down` (-v pour supprimer les données sql)
