@@ -7,6 +7,7 @@ from flask import Flask, g, jsonify, redirect, render_template_string, request, 
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     Counter,
+    Gauge,
     Histogram,
     generate_latest,
 )
@@ -47,16 +48,28 @@ PAGE = """
 http_requests_total = Counter(
     "http_requests_total",
     "Total HTTP requests received",
-    labelnames=("method", "endpoint", "status"),
+    labelnames=("method", "endpoint", "code"),
 )
 
 
-# Histogramme de la durée des requêtes HTTP (pour monitoring)
+# Histogramme de la durée des requêtes HTTP par route (pour monitoring)
 request_duration_seconds = Histogram(
     "request_duration_seconds",
     "HTTP request processing time in seconds",
-    labelnames=("method", "endpoint", "status"),
+    labelnames=("endpoint",),
 )
+
+
+# Jauge de la version / du SHA déployé (pour monitoring)
+app_build_info = Gauge(
+    "app_build_info",
+    "Deployed application version and commit SHA",
+    labelnames=("version", "commit"),
+)
+app_build_info.labels(
+    version=os.environ.get("APP_VERSION", "0.0.0"),
+    commit=os.environ.get("GIT_SHA", "unknown"),
+).set(1)
 
 
 def initialize_database():
@@ -131,13 +144,12 @@ def start_timer():
 @app.after_request
 def record_request(response):
     if request.path != "/metrics":
-        labels = {
-            "method": request.method,
-            "endpoint": request.path,
-            "status": str(response.status_code),
-        }
-        http_requests_total.labels(**labels).inc()
-        request_duration_seconds.labels(**labels).observe(
+        http_requests_total.labels(
+            method=request.method,
+            endpoint=request.path,
+            code=str(response.status_code),
+        ).inc()
+        request_duration_seconds.labels(endpoint=request.path).observe(
             time.perf_counter() - g.request_started_at
         )
     return response
@@ -233,5 +245,7 @@ def test_health_metrics_and_test_error_endpoints():
 
         metrics = client.get("/metrics").get_data(as_text=True)
         assert "http_requests_total" in metrics
+        assert "request_duration_seconds_bucket" in metrics
+        assert "app_build_info" in metrics
         assert 'endpoint="/test-error"' in metrics
-        assert 'status="500"' in metrics
+        assert 'code="500"' in metrics

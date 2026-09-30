@@ -116,7 +116,9 @@ jobs:
 
       - name: Build and start services
         working-directory: application
-        run: docker-compose up --build --detach
+        run: |
+          docker-compose down --volumes --remove-orphans || true
+          docker-compose up --build --detach
 
       - name: Verify application
         working-directory: application
@@ -135,7 +137,7 @@ jobs:
       - name: Stop services
         if: always()
         working-directory: application
-        run: docker-compose down --volumes
+        run: docker-compose down --volumes --remove-orphans
 
   # CI status check
   ci-ok:
